@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dodgeball Duel</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #1d1430; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff6ec; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; cursor: crosshair; }
+  [hidden] { display: none !important; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 1px 4px #000c; left: 0; right: 0; text-align: center; }
+  #score { top: max(8px, env(safe-area-inset-top)); display: flex; justify-content: center; align-items: center; gap: 8px; }
+  #score .t { display: flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 10px; font: 900 22px/1.25 system-ui, sans-serif; font-variant-numeric: tabular-nums; color: #fff; }
+  #score .t0 { background: #e8434f; } #score .t1 { background: #3577e6; flex-direction: row-reverse; }
+  #score .t.me { box-shadow: 0 0 0 3px #ffffffcc; }
+  #score .t i { font: 800 11px system-ui, sans-serif; font-style: normal; letter-spacing: .08em; opacity: .9; }
+  #score .wins { font-size: 14px; letter-spacing: 2px; }
+  #clock { min-width: 62px; padding: 3px 10px; border-radius: 10px; background: #00000080; font: 800 16px/1.3 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+  #clock small { display: block; font-size: 10px; letter-spacing: .1em; opacity: .8; }
+  #hint { top: calc(max(8px, env(safe-area-inset-top)) + 50px); font-size: 14px; opacity: .9; padding: 0 14px; transition: opacity 1s; }
+  #msg { top: 42%; transform: translateY(-50%); font: 900 min(14vw, 80px)/1 system-ui, sans-serif; letter-spacing: .03em; -webkit-text-stroke: 2px #1d1430; opacity: 0; transition: opacity .2s, transform .25s; }
+  #msg small { display: block; margin-top: 8px; font-size: 18px; font-weight: 700; letter-spacing: 0; -webkit-text-stroke: 0; }
+  #msg.on { opacity: 1; transform: translateY(-50%) scale(1.06); }
+  #net { bottom: max(6px, env(safe-area-inset-bottom)); font-size: 12px; opacity: .75; }
+  #pad { position: fixed; right: max(12px, env(safe-area-inset-right)); bottom: calc(max(12px, env(safe-area-inset-bottom)) + 22px); width: 190px; height: 110px; touch-action: none; }
+  #pad button { position: absolute; border-radius: 50%; border: 3px solid #ffffffc0; background: #1d143099; color: #fff; font: 900 14px system-ui, sans-serif; touch-action: none; padding: 0; }
+  #pad button.on { background: #ffffffaa; color: #1d1430; }
+  #bThrow { right: 0; bottom: 0; width: 92px; height: 92px; border-color: #ffb21e !important; }
+  #bCatch { right: 104px; bottom: 6px; width: 78px; height: 78px; border-color: #7cf2c9 !important; }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #120b1eb8; }
+  .card { box-sizing: border-box; width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 22px; border-radius: 16px; background: #2a1d45; border: 1px solid #ffffff22; text-align: center; }
+  .card h2 { margin: 0 0 4px; font-size: 27px; }
+  .card h3 { margin: 14px 0 4px; font-size: 14px; color: #ffb21e; text-align: left; }
+  .card ol { text-align: left; margin: 0; padding-left: 26px; font-size: 14px; min-height: 22px; }
+  .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.me { color: #ffb21e; font-weight: 700; }
+  .card p { margin: 8px 0 0; font-size: 13px; opacity: .8; }
+  #final { font: 800 20px system-ui, sans-serif; }
+  button.go { width: 100%; min-height: 48px; margin-top: 14px; border: 0; border-radius: 12px; background: #ffb21e; color: #2a1600; font: 800 17px system-ui, sans-serif; cursor: pointer; }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="hud" id="score"><span class="t t0" id="s0"></span><span id="clock"></span><span class="t t1" id="s1"></span></div>
+<div class="hud" id="hint"></div>
+<div class="hud" id="msg"></div>
+<div class="hud" id="net">Connecting…</div>
+<div id="pad" hidden><button id="bThrow">THROW</button><button id="bCatch">CATCH</button></div>
+<div id="over" hidden><div class="card">
+  <h2 id="winner"></h2><div id="final"></div>
+  <h3>Most outs this match</h3><ol id="outs"></ol>
+  <h3>Most outs ever</h3><ol id="board"><li>Loading…</li></ol>
+  <button class="go" id="again">Play again</button><p id="next"></p>
+</div></div>
+<script>
+/* ═══ DODGEBALL DUEL · a Multiplayer Agent starter ════════════════════════════════════
+ * Two teams, one line, five balls. Rush the middle, grab a ball, throw it. Get hit and you're out
+ * to the bench; press Catch just as a ball reaches you and the THROWER is out instead. Last team
+ * standing wins the round; first to three rounds wins the match.
+ * Versus, 2–10 players on two teams; bots fill every empty spot, so it's always at least 4 v 4.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ team size, rounds, court size, running, throwing, catching, the bots
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   COURT ......... sizes, each team's half, start spots, the bench
+ *   BALLS ......... rolling balls, balls in flight, picking up, throwing, aiming
+ *   MATCH (HOST) .. teams, rounds, who is out, the winner, the balls. Only the host writes these.
+ *   BOTS .......... the bot brain: grab a ball, line up a throw, dodge (or catch) incoming balls
+ *   ME ............ running, picking up, throwing, catching, getting hit
+ *   DRAW .......... the court seen from YOUR side (your team on the left, or at the bottom on a phone)
+ *   HUD & RESULTS . scoreboard, messages, results card, leaderboard
+ *   INPUT ......... keyboard + mouse (aim), and a thumb stick + Throw / Catch buttons on touch
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
+ *   - Each player runs its OWN player on its own screen and writes it to its entity: `p`
+ *     {x, y, f, ck, o, by} (f = facing, ck = catching, o = the round it got out in, by = who got it)
+ *     about 15 times a second, `hb` (heartbeat) once a second, `rdy` (Play again), `n`/`c` once.
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s), worked out
+ *     every frame. The balls are shared, so the host owns them. Only the host writes the shared fields:
+ *       `game`  {id, v, phase, round, teams, wins, startAt, endsAt, outs, kills, roundWin, resumeAt, win, overAt}:
+ *               who plays (sessionIds or bots "b1".."b9"), who is out this round (`outs` {id: who got them}),
+ *               outs per player, rounds won, the clock (timestamps). `v` goes up on every write.
+ *       `balls` [{i, x, y, vx, vy, o, t, l, n}]: every ball ~15 times a second (o = who holds it, l = 1 while
+ *               it flies after a throw by `t`, n = that throw's number).
+ *       `bots`  [{i, x, y, f, ck}]: the bots ~10 times a second.
+ *   - Intents and events: "grab" {i} (my hand touched ball i: the host says yes by writing me as its holder),
+ *     "throw" {i, x, y, vx, vy, n} (to everyone: every screen flies the ball at once; the host adopts it),
+ *     "hit" {i, n, by} and "caught" {i, n, by}.
+ *   - A THROWN BALL IS DECIDED BY THE ONE IT REACHES (like a dodge): only you check balls against yourself.
+ *     Catching at that moment, you send "caught" and the thrower is out; otherwise you're out: your `p.o`
+ *     says so, and you send "hit". The host decides it for bots, and writes every out into `game.outs`.
+ *   - Someone who joins takes a bot's spot (out if the bot was out); someone who leaves is replaced by a bot.
+ *     A new host adopts `game`, `balls` and `bots` and carries on.
+ *   - ?attract plays offline, bots only (the preview video is recorded from it).
+ *   - Leaderboard "dodge-outs": every player you get out (a hit or a catch) adds 1 to your total.
+ */
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  teamSize: 4,          // players per team; bots fill the spots people don't
+  maxTeam: 5,           // the most per team (10 in all)
+  roundsToWin: 3,       // rounds a team needs to win the match
+  roundMs: 75000,       // round clock; when it runs out the team with more players in wins the round
+  startMs: 2400,        // ms on the back line before the rush (3, 2, 1, GO)
+  roundOverMs: 3000,    // ms between rounds
+  resultsMs: 10000,     // ms on the results card before the next match
+  courtL: 1100, courtW: 620, // the court, in court units: x along it (the middle line at x = 0), y across
+  balls: 5,
+  playerR: 18, ballR: 11,
+  run: 300,             // running speed, units/s
+  accel: 2400,          // how snappy running is
+  reach: 10,            // how far past your body you can scoop a ball
+  throwSpeed: 780,      // a thrown ball's speed, units/s...
+  liveMs: 1150,         // ...and how long it flies before it's just a rolling ball
+  ballFriction: 1.8,    // how fast a rolling ball slows
+  wallBounce: 0.6,
+  catchMs: 320,         // how long one press of Catch is open...
+  catchEvery: 850,      // ...and how often you can press it
+  catchSlow: 0.45,      // share of your speed while catching
+  aimAssist: 1.0,       // auto-aim picks a target within this angle (radians) of where you face
+  botSpeed: 0.82,       // bots run at this share of your speed
+  botThink: 220,        // ms between bot decisions
+  botError: 55,         // how far off bots aim, units
+  botWait: 900,         // ms (roughly) a bot holds a ball before throwing
+  botCatch: 0.28,       // chance a bot tries to catch a ball coming at it (otherwise it dodges)
+  botDodge: 0.7,        // chance a bot notices a ball coming at it at all
+  sendMs: 66,           // my player and the balls (~15 a second)
+  botsMs: 100,          // the bots (~10 a second)
+  board: "dodge-outs",
+};
+const TEAM_COLORS = ["#e8434f", "#3577e6"], TEAM_DARK = ["#7a1620", "#163c7c"], TEAM_NAMES = ["Red", "Blue"];
+const COLORS = ["#ffd166", "#ffffff", "#7cf2c9", "#c7a2ff", "#ff9f43", "#ff8fd0", "#a6f26b", "#7fe3ff"]; // each person's own color (their head)
+const BOT_NAMES = ["", "Dodger", "Zinger", "Whip", "Duck", "Rocket", "Slider", "Bouncer", "Noodle", "Ace"]; // bot "b3" is Whip
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'dodgeball-duel',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const memo = new Map();
+/** A JSON field, parsed once per change (read-only: never mutate what this returns). */
+function cached(key, raw, fb) { const m = memo.get(key); if (m && m.raw === raw) return m.v; const v = parse(raw, fb); memo.set(key, { raw, v }); return v; }
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map();
+/** Players whose heartbeat moved in the last 3s (plus us), sorted by sessionId. */
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+let wakeHold = 0, lastFrameAt = 0; // a tab whose frames stopped (frozen, or in the background) doesn't act as host, nor for 700ms after it wakes (see frame())
+const isHost = () => livePlayers()[0] === net.sessionId && performance.now() >= wakeHold && !(lastFrameAt && performance.now() - lastFrameAt > 1000);
+const humans = () => livePlayers().filter((id) => !(ATTRACT && id === net.sessionId)); // in the preview you only watch
+
+// ── COURT ───────────────────────────────────────────────────────────────────────────
+// Court units: x runs -HL..HL along the court, y runs -HW..HW across. Red (team 0) plays in x < 0, Blue in x > 0.
+const HL = CONFIG.courtL / 2, HW = CONFIG.courtW / 2, PR = CONFIG.playerR, BR = CONFIG.ballR;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+/** Keep a player inside its own half. */
+function keepInHalf(p, team) {
+  p.x = team === 0 ? clamp(p.x, -HL + PR, -PR - 2) : clamp(p.x, PR + 2, HL - PR);
+  p.y = clamp(p.y, -HW + PR, HW - PR);
+}
+/** Start spots on the back line, spread across it. */
+function spotOf(team, i, size) { const f = team === 0 ? -1 : 1; return { x: f * (HL - 70), y: (size > 1 ? (i / (size - 1) - 0.5) : 0) * (HW * 1.5), f: team === 0 ? 0 : Math.PI }; }
+/** Where out players sit: a bench outside the court, along the near side of their own half. */
+function benchSpot(team, k) { const f = team === 0 ? -1 : 1; return { x: f * (110 + k * 46), y: HW + 52, f: -Math.PI / 2 }; }
+const ballSpot = (i) => ({ x: 0, y: (i / (CONFIG.balls - 1) - 0.5) * HW * 1.4 }); // the balls start on the middle line
+
+// ── BALLS ───────────────────────────────────────────────────────────────────────────
+/** Roll a loose ball, or fly a live one, dt seconds; walls bounce. Returns true if it hit a wall. */
+function stepBall(b, dt) {
+  b.x += b.vx * dt; b.y += b.vy * dt;
+  let wall = false;
+  if (Math.abs(b.x) > HL - BR) { b.x = Math.sign(b.x) * (HL - BR); b.vx = -b.vx * CONFIG.wallBounce; wall = true; }
+  if (Math.abs(b.y) > HW - BR) { b.y = Math.sign(b.y) * (HW - BR); b.vy = -b.vy * CONFIG.wallBounce; wall = true; }
+  if (!b.l) { const f = Math.exp(-CONFIG.ballFriction * dt); b.vx *= f; b.vy *= f; if (Math.abs(b.vx) + Math.abs(b.vy) < 4) b.vx = b.vy = 0; }
+  return wall;
+}
+/** A ball stops flying (it hit a wall, a player, or ran out of steam) and rolls on slowly. */
+function deaden(b, bounce) { b.l = 0; b.t = ""; if (bounce) { b.vx = -b.vx * 0.25 + (Math.random() - 0.5) * 140; b.vy = -b.vy * 0.25 + (Math.random() - 0.5) * 140; } else { b.vx *= 0.35; b.vy *= 0.35; } }
+const handOf = (p) => ({ x: p.x + Math.cos(p.f) * (PR + 6), y: p.y + Math.sin(p.f) * (PR + 6) });
+/** Can player p scoop up loose ball b? */
+const canScoop = (p, b) => !b.o && !b.l && Math.hypot(b.x - p.x, b.y - p.y) < PR + BR + CONFIG.reach;
+/** Does a flying ball at (x, y) touch player p? */
+const touches = (x, y, p) => Math.hypot(x - p.x, y - p.y) < PR + BR;
+/** The direction to throw from player p (team `team`): at `aim` if given, else at the opponent nearest where p faces, led a little. */
+function throwDir(p, team, g, aim) {
+  if (aim) return Math.atan2(aim.y - p.y, aim.x - p.x);
+  let best = null, bestA = CONFIG.aimAssist;
+  for (const id of g.teams[1 - team]) {
+    const o = bodyOf(id); if (!o || !inGame(g, id)) continue;
+    const a = Math.abs(wrapA(Math.atan2(o.y - p.y, o.x - p.x) - p.f)); if (a < bestA) { bestA = a; best = o; }
+  }
+  if (!best) return p.f;
+  const T = Math.hypot(best.x - p.x, best.y - p.y) / CONFIG.throwSpeed;
+  return Math.atan2(best.y + (best.vy || 0) * T - p.y, best.x + (best.vx || 0) * T - p.x);
+}
+
+// ── MATCH (HOST) ────────────────────────────────────────────────────────────────────
+const host = { last: null, wasHost: false, bots: new Map(), lastBalls: 0, lastBots: 0, lastBody: "", balls: [] };
+const isBot = (id) => /^b\d$/.test(id);
+const teamOf = (g, id) => (g.teams[0].includes(id) ? 0 : g.teams[1].includes(id) ? 1 : -1);
+const roundKey = (g) => `${g.id}:${g.round}`;
+/** Is `id` still in this round (not out)? People's own entities say so at once; the host's `outs` say so for everyone. */
+function inGame(g, id) {
+  if ((g.outs || {})[id] !== undefined) return false;
+  if (id === net.sessionId) return me.out !== roundKey(g);
+  return isBot(id) || (S.entities.players[id] || {}).o !== roundKey(g);
+}
+/** The game as state has it, or the host's own newer write that hasn't come back yet. `v` only goes up. */
+function game() {
+  const g = cached("game", S.shared.game, null);
+  return host.last && isHost() && (!g || host.last.v > g.v) ? host.last : g;
+}
+function writeGame(g) { g = { ...g, v: (game()?.v ?? 0) + 1 }; host.last = g; net.setShared("game", JSON.stringify(g)); return g; }
+const teamSize = (people) => clamp(Math.ceil(people / 2), CONFIG.teamSize, CONFIG.maxTeam);
+/** Fill gaps (null) and both teams up to `size` with bots; drop spare bots. */
+function fillBots(teams, size) {
+  const used = new Set(teams.flat());
+  const newBot = () => { let k = 1; while (used.has("b" + k)) k++; used.add("b" + k); return "b" + k; };
+  return teams.map((t) => {
+    t = t.map((id) => id || newBot());
+    for (let i = t.length - 1; i >= 0 && t.length > size; i--) if (isBot(t[i])) t.splice(i, 1);
+    while (t.length < size) t.push(newBot());
+    return t;
+  });
+}
+/** Everyone still here keeps their spot; a newcomer takes a bot's spot (and its out, if it was out) on the team with fewer people. */
+function arrangeTeams(g, people) {
+  const size = teamSize(people.length), t = g.teams.map((team) => team.map((id) => (isBot(id) || people.includes(id) ? id : null)));
+  const outs = { ...g.outs }, count = (k) => t[k].filter((id) => id && !isBot(id)).length;
+  for (const id of people) {
+    if (t[0].includes(id) || t[1].includes(id)) continue;
+    const k = count(0) <= count(1) ? 0 : 1;
+    if (count(k) >= size) continue; // every spot has a person in it: this one watches
+    let i = t[k].indexOf(null); if (i < 0) i = t[k].findIndex(isBot);
+    if (i < 0) t[k].push(id); else { if (outs[t[k][i]] !== undefined) outs[id] = outs[t[k][i]]; t[k][i] = id; }
+  }
+  return { teams: fillBots(t, size), outs };
+}
+/** A round starts: everyone on the back line, the balls on the middle line, nobody out. */
+function newRound(g, round, t) {
+  const startAt = t + CONFIG.startMs + 600;
+  host.balls = Array.from({ length: CONFIG.balls }, (_, i) => ({ i, ...ballSpot(i), vx: 0, vy: 0, o: "", t: "", l: 0, n: 0 }));
+  for (const b of host.bots.values()) { const k = teamOf(g, b.id); if (k >= 0) Object.assign(b, spotOf(k, g.teams[k].indexOf(b.id), g.teams[k].length), { vx: 0, vy: 0, ck: 0, ckCd: 0, holdAt: 0 }); }
+  g = writeGame({ ...g, phase: "play", round, startAt, endsAt: startAt + CONFIG.roundMs, outs: {}, roundWin: -1 });
+  writeBalls(); writeBots();
+  return g;
+}
+function newGame(id) {
+  const people = humans().sort(() => Math.random() - 0.5), teams = [[], []];
+  people.forEach((p, i) => teams[i % 2].push(p));
+  return { id, phase: "play", round: 1, teams: fillBots(teams, teamSize(people.length)), wins: [0, 0], startAt: 0, endsAt: 0, outs: {}, kills: {}, roundWin: -1, resumeAt: 0, win: -1, overAt: 0 };
+}
+function writeBalls(onlyIfMoved) {
+  const r = Math.round, body = JSON.stringify(host.balls.map((b) => ({ i: b.i, x: r(b.x), y: r(b.y), vx: r(b.vx), vy: r(b.vy), o: b.o, t: b.t, l: b.l, n: b.n })));
+  host.lastBalls = performance.now();
+  if (onlyIfMoved && body === host.lastBody) return; // nothing moved: save the message
+  host.lastBody = body; net.setShared("balls", body);
+}
+const pWire = (p, now) => ({ x: Math.round(p.x), y: Math.round(p.y), f: +p.f.toFixed(2), ck: p.ck > now ? 1 : 0 });
+function writeBots() { const now = performance.now(); host.lastBots = now; net.setShared("bots", JSON.stringify([...host.bots.values()].map((b) => ({ i: b.id, ...pWire(b, now) })))); }
+const newBot = (id, s) => ({ id, x: s.x, y: s.y, f: s.f, vx: 0, vy: 0, ck: 0, ckCd: 0, thinkAt: 0, tx: s.x, ty: s.y, holdAt: 0, ex: 0, ey: 0 });
+/** Become host: take over the game, the balls and the bots exactly as state has them (bots from where this screen drew them). */
+function adopt() {
+  host.wasHost = true; host.bots.clear();
+  host.balls = (parse(S.shared.balls, []) || []).map((b) => { const f = flights.get(b.i); return f && f.n === b.n && b.l ? { ...b, x: f.x, y: f.y, until: f.until } : { ...b, until: performance.now() + CONFIG.liveMs * 0.5 }; });
+  for (const q of parse(S.shared.bots, [])) { const v = views.get(q.i) || q; host.bots.set(q.i, newBot(q.i, { x: v.x, y: v.y, f: v.f })); }
+}
+/** host.bots holds exactly the bots on the teams. */
+function syncBots(g) {
+  for (const id of g.teams.flat()) if (isBot(id) && !host.bots.has(id)) { const k = teamOf(g, id); host.bots.set(id, newBot(id, spotOf(k, g.teams[k].indexOf(id), g.teams[k].length))); }
+  for (const id of [...host.bots.keys()]) if (teamOf(g, id) < 0) host.bots.delete(id);
+}
+/** `id` is out, got by `by`: written into game.outs (with a point for whoever got them). Drops any ball they held. */
+function markOut(g, id, by) {
+  if (!inGame(g, id) && (g.outs || {})[id] !== undefined) return g;
+  const kills = { ...g.kills }; if (by && teamOf(g, by) !== teamOf(g, id)) kills[by] = [((kills[by] || [])[0] || 0) + 1, nameOf(by)];
+  for (const b of host.balls) if (b.o === id) { b.o = ""; b.vx = (Math.random() - 0.5) * 200; b.vy = (Math.random() - 0.5) * 200; }
+  return writeGame({ ...g, outs: { ...g.outs, [id]: by || "" }, kills });
+}
+function hostTick(dt, now) {
+  if (!host.wasHost) adopt();
+  const t = Date.now();
+  let g = game();
+  if (!g) { g = writeGame(newGame(1)); syncBots(g); g = newRound(g, 1, t); }
+  const arranged = arrangeTeams(g, humans());
+  if (JSON.stringify(arranged.teams) !== JSON.stringify(g.teams)) g = writeGame({ ...g, ...arranged });
+  syncBots(g);
+  if (!host.balls.length) host.balls = Array.from({ length: CONFIG.balls }, (_, i) => ({ i, ...ballSpot(i), vx: 0, vy: 0, o: "", t: "", l: 0, n: 0 }));
+  // people who say they're out (their own entity) go into game.outs
+  for (const id of g.teams.flat()) { const p = S.entities.players[id]; if (!isBot(id) && p && p.o === roundKey(g) && g.outs[id] === undefined) g = markOut(g, id, p.by || ""); }
+  if (g.phase === "play" && t >= g.startAt) {
+    const left = [0, 1].map((k) => g.teams[k].filter((id) => inGame(g, id)).length);
+    if (!left[0] || !left[1] || t >= g.endsAt) { // a round is over: last team standing, or more players standing at the buzzer
+      const win = left[0] === left[1] ? -1 : left[0] > left[1] ? 0 : 1, wins = [...g.wins]; if (win >= 0) wins[win]++;
+      g = writeGame({ ...g, phase: "roundover", roundWin: win, wins, resumeAt: t + CONFIG.roundOverMs });
+    }
+  }
+  if (g.phase === "roundover" && t >= g.resumeAt) {
+    const champ = g.wins.findIndex((w) => w >= CONFIG.roundsToWin);
+    if (champ >= 0) g = writeGame({ ...g, phase: "over", win: champ, overAt: t + CONFIG.resultsMs });
+    else g = newRound(g, g.round + 1, t);
+  }
+  if (g.phase === "over") {
+    const seated = g.teams.flat().filter((id) => !isBot(id));
+    const ready = seated.length && seated.every((id) => (id === net.sessionId ? myReady : (S.entities.players[id] || {}).rdy) === g.id);
+    if (t > g.overAt || ready) { g = writeGame(newGame(g.id + 1)); syncBots(g); g = newRound(g, 1, t); }
+  }
+  const live = g.phase === "play" && t >= g.startAt;
+  for (const b of host.bots.values()) botTick(b, g, dt, now, live);
+  if (live || g.phase === "roundover") g = hostBalls(g, dt, now);
+  if (now - host.lastBalls > CONFIG.sendMs) writeBalls(true);
+  if (now - host.lastBots > CONFIG.botsMs) writeBots();
+}
+/** The host moves every ball: held ones sit in their holder's hand, flying ones hit bots (and the host's own player). */
+function hostBalls(g, dt, now) {
+  for (const b of host.balls) {
+    if (b.o) { const h = bodyOf(b.o); if (!h || !inGame(g, b.o)) { b.o = ""; continue; } const hd = handOf(h); b.x = hd.x; b.y = hd.y; b.vx = b.vy = 0; continue; }
+    const wall = stepBall(b, dt);
+    if (b.l && (wall || now > b.until)) { deaden(b, false); if (wall) bounceFx(b); }
+    if (b.l) {
+      const team = teamOf(g, b.t);
+      for (const id of g.teams[1 - team] || []) {
+        if (!inGame(g, id)) continue;
+        if (id === net.sessionId) { if (touches(b.x, b.y, me)) { g = ballReachedMe(g, b); break; } continue; } // my own screen decides for me
+        const bot = host.bots.get(id); if (!bot || !touches(b.x, b.y, bot)) continue;
+        if (bot.ck > now) { g = caught(g, b, id); } else { const by = b.t; deaden(b, true); hitFx(bot.x, bot.y, id); g = markOut(g, id, by); }
+        break;
+      }
+    } else if (g.phase === "play") { // a loose ball: the nearest bot (or the host's own player) touching it scoops it up
+      let best = null, bd = 1e9;
+      for (const s of [...host.bots.values(), me]) {
+        const id = s === me ? net.sessionId : s.id, d = Math.hypot(b.x - s.x, b.y - s.y) + Math.random() * 6; // a dead heat goes either way
+        if (d >= bd || teamOf(g, id) < 0 || !inGame(g, id) || host.balls.some((q) => q.o === id) || !canScoop(s, b)) continue;
+        best = s; bd = d;
+      }
+      if (best) { b.o = best === me ? net.sessionId : best.id; writeBalls(); if (best === me) sfx("grab"); else best.holdAt = now + CONFIG.botWait * (0.6 + Math.random()); }
+    }
+  }
+  return g;
+}
+/** `id` caught ball b: it's theirs now, and the thrower is out. */
+function caught(g, b, id) {
+  const thrower = b.t; b.l = 0; b.t = ""; b.o = id; b.vx = b.vy = 0;
+  const c = bodyOf(id); if (c) catchFx(c.x, c.y);
+  writeBalls();
+  return thrower ? markOut(g, thrower, id) : g;
+}
+/** Someone else's hand touched loose ball i on their screen: yes, unless it's taken, far from where the host has it, or they hold one already. */
+function applyGrab(msg, from) {
+  const g = game(), b = host.balls[+msg.i], p = bodyOf(from);
+  if (!g || !b || !p || g.phase !== "play" || b.o || b.l || teamOf(g, from) < 0 || !inGame(g, from) || host.balls.some((q) => q.o === from)) return;
+  if (Math.hypot(b.x - p.x, b.y - p.y) > PR + BR + CONFIG.reach + 70) return; // slack: their latest position can be a little old
+  b.o = from; writeBalls();
+}
+/** Someone threw the ball they hold: it flies from where their screen says. */
+function applyThrow(msg, from) {
+  const b = host.balls[+msg.i];
+  if (!b || b.o !== from) return;
+  const x = +msg.x, y = +msg.y, vx = +msg.vx, vy = +msg.vy; if (!isFinite(x + y + vx + vy)) return;
+  const k = Math.min(1, CONFIG.throwSpeed / (Math.hypot(vx, vy) || 1));
+  Object.assign(b, { x, y, vx: vx * k, vy: vy * k, o: "", t: from, l: 1, n: +msg.n || 0, until: performance.now() + CONFIG.liveMs }); writeBalls();
+}
+/** A thrown ball reached someone on their own screen: they say whether it hit them or they caught it. */
+function applyHitOrCatch(msg, from, catching) {
+  let g = game(); const b = host.balls[+msg.i];
+  if (!g || teamOf(g, from) < 0 || !inGame(g, from)) return;
+  if (b && b.l && b.n === +msg.n) { if (catching) g = caught(g, b, from); else { deaden(b, true); writeBalls(); } }
+  else if (catching && b && !b.o) { b.o = from; b.l = 0; writeBalls(); } // the host already let it drop: still theirs
+  if (!catching) markOut(g, from, msg.by);
+  else if (msg.by && inGame(g, msg.by)) markOut(g, msg.by, from);
+}
+
+// ── BOTS ────────────────────────────────────────────────────────────────────────────
+/** Where a player is on this screen: mine, a bot (the host's live one, or eased from state), or another person's. */
+function bodyOf(id) { return id === net.sessionId ? me : (host.wasHost && host.bots.get(id)) || views.get(id) || null; }
+function botTick(b, g, dt, now, live) {
+  const team = teamOf(g, b.id); if (team < 0) return;
+  if (!inGame(g, b.id)) { const s = benchSpot(team, Object.keys(g.outs).filter((id) => teamOf(g, id) === team).indexOf(b.id)); b.x += (s.x - b.x) * Math.min(1, dt * 4); b.y += (s.y - b.y) * Math.min(1, dt * 4); b.f = s.f; return; }
+  if (!live) { if (g.phase === "play") Object.assign(b, spotOf(team, g.teams[team].indexOf(b.id), g.teams[team].length), { vx: 0, vy: 0 }); return; }
+  if (now > b.thinkAt) botThink(b, g, team, now);
+  const dx = b.tx - b.x, dy = b.ty - b.y, d = Math.hypot(dx, dy), top = CONFIG.run * CONFIG.botSpeed * (b.ck > now ? CONFIG.catchSlow : 1);
+  const wx = d > 4 ? (dx / d) * top : 0, wy = d > 4 ? (dy / d) * top : 0, a = Math.min(1, CONFIG.accel * dt / top);
+  b.vx += (wx - b.vx) * a; b.vy += (wy - b.vy) * a; b.x += b.vx * dt; b.y += b.vy * dt;
+  keepInHalf(b, team);
+  const held = host.balls.find((q) => q.o === b.id);
+  const foe = nearestFoe(b, g, team);
+  if (foe) b.f += wrapA(Math.atan2(foe.y - b.y, foe.x - b.x) - b.f) * Math.min(1, dt * 8);
+  if (held && foe && now > b.holdAt) { // let it fly: at the nearest foe, led, with some error
+    const T = Math.hypot(foe.x - b.x, foe.y - b.y) / CONFIG.throwSpeed, ex = (Math.random() - 0.5) * 2 * CONFIG.botError, ey = (Math.random() - 0.5) * 2 * CONFIG.botError;
+    const ang = Math.atan2(foe.y + (foe.vy || 0) * T + ey - b.y, foe.x + (foe.vx || 0) * T + ex - b.x);
+    hostThrow(held, b, ang);
+  }
+}
+/** A bot decides where to run: dodge a ball coming at it (or get ready to catch it), go for a loose ball, or line up a throw. */
+function botThink(b, g, team, now) {
+  b.thinkAt = now + CONFIG.botThink * (0.6 + Math.random() * 0.8);
+  const dir = team === 0 ? 1 : -1, held = host.balls.find((q) => q.o === b.id);
+  for (const q of host.balls) { // a ball flying at me?
+    if (!q.l || teamOf(g, q.t) === team) continue;
+    const rx = b.x - q.x, ry = b.y - q.y, sp = Math.hypot(q.vx, q.vy) || 1, along = (rx * q.vx + ry * q.vy) / sp, miss = Math.abs(rx * q.vy - ry * q.vx) / sp;
+    if (along < 0 || along > 420 || miss > PR + BR + 14 || Math.random() > CONFIG.botDodge) continue;
+    if (!held && Math.random() < CONFIG.botCatch && now > b.ckCd) { b.catchAt = now + Math.max(0, (along - 60) / sp * 1000); b.thinkAt = now + 380; } // time a catch
+    else { const s = (rx * q.vy - ry * q.vx) >= 0 ? 1 : -1; b.tx = b.x + (-q.vy / sp) * s * 120; b.ty = b.y + (q.vx / sp) * s * 120; b.thinkAt = now + 300; return; } // step out of its way
+  }
+  if (held) { // back off from the line, a bit sideways, and throw after a moment
+    b.tx = -dir * (150 + Math.random() * 170); b.ty = clamp(b.y + (Math.random() - 0.5) * 220, -HW + 40, HW - 40); return;
+  }
+  b.holdAt = 0;
+  const mine = host.balls.filter((q) => !q.o && !q.l && (q.x * dir <= 4)).sort((p, q) => Math.hypot(p.x - b.x, p.y - b.y) - Math.hypot(q.x - b.x, q.y - b.y));
+  const mates = g.teams[team].map(bodyOf).filter(Boolean);
+  const free = mine.find((q) => !mates.some((m) => m !== b && Math.hypot(q.x - m.x, q.y - m.y) < Math.hypot(q.x - b.x, q.y - b.y) - 20));
+  if (free) { b.tx = free.x; b.ty = free.y; return; }
+  // nothing to grab: keep moving in the back of my half, away from foes holding balls
+  const threat = g.teams[1 - team].map((id) => (host.balls.some((q) => q.o === id) ? bodyOf(id) : null)).filter(Boolean)[0];
+  b.tx = -dir * (HL * (0.45 + Math.random() * 0.4)); b.ty = threat ? clamp(-threat.y * 0.8 + (Math.random() - 0.5) * 200, -HW + 40, HW - 40) : (Math.random() - 0.5) * HW * 1.6;
+}
+function nearestFoe(p, g, team) {
+  let best = null, bd = 1e9;
+  for (const id of g.teams[1 - team]) { if (!inGame(g, id)) continue; const o = bodyOf(id); if (!o) continue; const d = Math.hypot(o.x - p.x, o.y - p.y); if (d < bd) { bd = d; best = o; } }
+  return best;
+}
+/** The host throws a ball for a bot (or for its own player). */
+function hostThrow(b, p, ang) {
+  const hd = handOf({ ...p, f: ang });
+  Object.assign(b, { x: hd.x, y: hd.y, vx: Math.cos(ang) * CONFIG.throwSpeed, vy: Math.sin(ang) * CONFIG.throwSpeed, o: "", t: p.id || net.sessionId, l: 1, n: (b.n || 0) + 1, until: performance.now() + CONFIG.liveMs });
+  p.holdAt = 0; throwFx(hd.x, hd.y); writeBalls();
+}
+// Bots press Catch at the moment they planned (botThink set catchAt).
+function botCatchCheck(now) { for (const b of host.bots.values()) if (b.catchAt && now >= b.catchAt) { b.catchAt = 0; b.ck = now + CONFIG.catchMs; b.ckCd = now + CONFIG.catchEvery; } }
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+let myName = "";
+try { myName = localStorage.getItem("mpa-name") || ""; } catch {}
+myName = myName || ["Swift", "Lucky", "Sneaky", "Speedy", "Golden", "Bouncy"][Math.floor(Math.random() * 6)] + " " + ["Arm", "Thrower", "Catcher", "Ducker", "Pitcher", "Flinger"][Math.floor(Math.random() * 6)];
+let myColor = COLORS[0], myReady = 0; // the color is picked on join: the first one nobody in the room has
+const me = { id: "", x: -480, y: 0, vx: 0, vy: 0, f: 0, ck: 0, ckCd: 0, out: "", by: "", placed: "", lastSend: 0, lastJson: "", grabAt: 0, throwN: 0 };
+const act = { throw: false, catch: false };
+const flights = new Map(); // ball i -> a ball flying on this screen { i, n, x, y, vx, vy, by, until }
+function myTick(dt, g, now) {
+  const team = teamOf(g, net.sessionId), t = Date.now(), live = g.phase === "play" && t >= g.startAt, key = roundKey(g);
+  me.id = net.sessionId;
+  const placeKey = team >= 0 ? `${key}:${team}` : "";
+  if (placeKey !== me.placed) { me.placed = placeKey; if (team >= 0) Object.assign(me, spotOf(team, g.teams[team].indexOf(net.sessionId), g.teams[team].length), { vx: 0, vy: 0, ck: 0 }); }
+  if (team >= 0) {
+    if (!inGame(g, net.sessionId)) { const s = benchSpot(team, Object.keys(g.outs).filter((id) => teamOf(g, id) === team).indexOf(net.sessionId)); me.x += (s.x - me.x) * Math.min(1, dt * 4); me.y += (s.y - me.y) * Math.min(1, dt * 4); me.f = s.f; }
+    else if (live) {
+      const [ix, iy] = myInput(), top = CONFIG.run * (me.ck > now ? CONFIG.catchSlow : 1), a = Math.min(1, CONFIG.accel * dt / CONFIG.run);
+      me.vx += (ix * top - me.vx) * a; me.vy += (iy * top - me.vy) * a; me.x += me.vx * dt; me.y += me.vy * dt;
+      keepInHalf(me, team);
+      const aimAt = aimPoint();
+      if (aimAt) me.f = Math.atan2(aimAt.y - me.y, aimAt.x - me.x); else if (Math.hypot(ix, iy) > 0.1) me.f += wrapA(Math.atan2(iy, ix) - me.f) * Math.min(1, dt * 14);
+      myActions(g, team, now, aimAt);
+    } else me.vx = me.vy = 0;
+    const json = JSON.stringify({ ...pWire(me, now), o: me.out, by: me.by });
+    if (now - me.lastSend > CONFIG.sendMs && json !== me.lastJson) { me.lastSend = now; me.lastJson = json; net.me.set("p", json); }
+  }
+  act.throw = act.catch = false;
+  if (!isHost()) flyBalls(g, dt, now, team);
+}
+/** Throw (if I hold a ball), catch (open my hands for a moment), and pick up a loose ball I touch. */
+function myActions(g, team, now, aimAt) {
+  const held = ballsNow().find((b) => b.o === net.sessionId);
+  if (act.catch && now > me.ckCd && !held) { me.ck = now + CONFIG.catchMs; me.ckCd = now + CONFIG.catchEvery; sfx("ready"); }
+  if (act.throw && held) {
+    const ang = throwDir(me, team, g, aimAt), hd = handOf({ ...me, f: ang }), vx = Math.cos(ang) * CONFIG.throwSpeed, vy = Math.sin(ang) * CONFIG.throwSpeed;
+    me.f = ang;
+    if (isHost()) hostThrow(host.balls[held.i], me, ang);
+    else {
+      const n = (held.n || 0) + 1; // the next throw number for this ball
+      flights.set(held.i, { i: held.i, n, x: hd.x, y: hd.y, vx, vy, by: net.sessionId, until: now + CONFIG.liveMs });
+      pending.thrown.set(held.i, now); throwFx(hd.x, hd.y);
+      net.send("throw", { i: held.i, x: Math.round(hd.x), y: Math.round(hd.y), vx: Math.round(vx), vy: Math.round(vy), n });
+    }
+  }
+  if (!held && !isHost() && now > me.grabAt) for (const b of ballsNow()) if (canScoop(me, b) && !pending.thrown.has(b.i)) { me.grabAt = now + 250; pending.grab = { i: b.i, at: now }; net.send("grab", { i: b.i }); sfx("grab"); break; }
+}
+const pending = { grab: null, thrown: new Map() }; // a non-host's grab the host hasn't confirmed yet; balls I just threw
+/** The balls as this screen should draw and use them: the state's, with my unconfirmed grab and my flights on top. */
+function ballsNow() {
+  if (isHost()) return host.balls;
+  const now = performance.now();
+  return (cached("balls", S.shared.balls, []) || []).map((b) => {
+    if (pending.thrown.has(b.i)) { if (b.o !== net.sessionId || now - pending.thrown.get(b.i) > 600) pending.thrown.delete(b.i); else return { ...b, o: "" }; }
+    if (pending.grab && pending.grab.i === b.i && now - pending.grab.at < 400 && !b.o) return { ...b, o: net.sessionId };
+    return b;
+  });
+}
+/** Not the host: fly every thrown ball on my screen, and decide the ones that reach ME. */
+function flyBalls(g, dt, now, team) {
+  for (const b of cached("balls", S.shared.balls, []) || []) { // a throw I missed the event for: fly it from the state
+    const f = flights.get(b.i);
+    if (b.l && (!f || f.n !== b.n) && !(f && f.done === b.n)) flights.set(b.i, { i: b.i, n: b.n, x: b.x, y: b.y, vx: b.vx, vy: b.vy, by: b.t, until: now + CONFIG.liveMs * 0.6 });
+  }
+  for (const f of flights.values()) {
+    if (f.done !== undefined) continue;
+    const wall = stepBall(Object.assign(f, { l: 1 }), dt);
+    if (wall || now > f.until) { f.done = f.n; if (wall) bounceFx(f); continue; }
+    const throwerTeam = teamOf(g, f.by);
+    if (team >= 0 && team !== throwerTeam && inGame(g, net.sessionId) && touches(f.x, f.y, me)) { f.done = f.n; ballReachedMe(g, { i: f.i, n: f.n, t: f.by, x: f.x, y: f.y }); continue; }
+    for (const id of g.teams[1 - throwerTeam] || []) { if (id === net.sessionId || !inGame(g, id)) continue; const o = bodyOf(id); if (o && touches(f.x, f.y, o)) { f.done = f.n; hitFx(o.x, o.y, id); break; } } // it stops at whoever it reaches; their screen says what happened
+  }
+}
+/** A thrown ball reached me (on my screen): caught if my hands are open, otherwise I'm out. */
+function ballReachedMe(g, b) {
+  const now = performance.now(), catching = me.ck > now && !ballsNow().some((q) => q.o === net.sessionId);
+  if (catching) {
+    catchFx(me.x, me.y); say(`<span style="color:#7cf2c9">CAUGHT!</span><small>${esc(nameOf(b.t))} is out</small>`, 1300);
+    if (isHost()) return caught(g, host.balls[b.i], net.sessionId);
+    pending.grab = { i: b.i, at: now }; net.send("caught", { i: b.i, n: b.n, by: b.t });
+    return g;
+  }
+  me.out = roundKey(g); me.by = b.t || ""; hitFx(me.x, me.y, net.sessionId); shake = 14;
+  say(`<span style="color:#ff6b6b">OUT!</span><small>${esc(nameOf(b.t))} got you</small>`, 1500);
+  if (isHost()) { const by = b.t; deaden(host.balls[b.i], true); writeBalls(); return markOut(g, net.sessionId, by); }
+  net.send("hit", { i: b.i, n: b.n, by: b.t });
+  return g;
+}
+
+// ── DRAW ────────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById("game"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1, scale = 1, wide = true, M = [1, 0, 0, 1], CY = 0, shake = 0;
+const cam = { x: 0, y: 0, z: 1 }; // what the view centers on, in court units, and its zoom (only the preview moves it)
+function fit() {
+  DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; wide = W >= H;
+  const long = CONFIG.courtL + 40, short = CONFIG.courtW + 150; // the bench sits outside one side of the court
+  scale = wide ? Math.min((W - 16) / long, (H - 84) / short) : Math.min((W - 12) / short, (H - 84) / long);
+  CY = H / 2 + 14;
+}
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+/** The view from your side: your team on the left (wide screens) or at the bottom (tall ones). M maps court to screen. */
+function setView(team) { const f = team === 1 ? -1 : 1; M = wide ? [f, 0, 0, f] : [0, f, -f, 0]; }
+const toScreen = (x, y) => { x -= cam.x; y -= cam.y; const k = scale * cam.z; return [W / 2 + (M[0] * x + M[1] * y) * k, CY + (M[2] * x + M[3] * y) * k]; };
+/** Screen point to court point, through the same camera that draws the frame. */
+function toCourt(sx, sy) { const k = scale * cam.z, u = (sx - W / 2) / k, v = (sy - CY) / k, det = M[0] * M[3] - M[1] * M[2]; return { x: (M[3] * u - M[1] * v) / det + cam.x, y: (-M[2] * u + M[0] * v) / det + cam.y }; }
+/** The preview zooms in and drifts toward the action (balls in flight, else every ball), so it reads in a small card. */
+function moveCam(dt) {
+  if (!ATTRACT) return;
+  cam.z = 1.4;
+  const bs = ballsNow(), live = bs.filter((b) => b.l), pick = live.length ? live : bs, a = 1 - Math.exp(-dt * 1.2);
+  const k = scale * cam.z, ex = Math.max(0, HL + 22 - W / 2 / k), ey = Math.max(0, HW + 22 - (H / 2 - 14) / k);
+  const mx = pick.reduce((s, b) => s + b.x, 0) / (pick.length || 1), my = pick.reduce((s, b) => s + b.y, 0) / (pick.length || 1);
+  cam.x += (clamp(mx * 0.6, -ex, ex) - cam.x) * a; cam.y += (clamp(my * 0.6, -ey, ey) - cam.y) * a;
+}
+const views = new Map(); // id -> another person's or (not host) a bot's player, eased toward its last write
+function syncViews(dt) {
+  const now = performance.now(), k = 1 - Math.exp(-dt * 16), seen = new Set(), src = [], live = new Set(livePlayers());
+  for (const [id, p] of Object.entries(S.entities.players || {})) if (id !== net.sessionId && p.p && live.has(id)) src.push([id, p.p, cached("p:" + id, p.p, null)]);
+  if (!isHost()) { const raw = S.shared.bots; for (const q of cached("bots", raw, []) || []) src.push([q.i, raw, q]); }
+  for (const [id, raw, f] of src) {
+    if (!f || typeof f.x !== "number") continue;
+    seen.add(id);
+    let v = views.get(id);
+    if (!v) { v = { id, x: f.x, y: f.y, vx: 0, vy: 0, f: +f.f || 0, tx: f.x, ty: f.y, tf: +f.f || 0, raw: null, at: now, ck: 0 }; views.set(id, v); }
+    if (raw !== v.raw) {
+      const dtw = Math.max(0.03, (now - v.at) / 1000);
+      Object.assign(v, { vx: (f.x - v.tx) / dtw, vy: (f.y - v.ty) / dtw, tx: f.x, ty: f.y, tf: +f.f || 0, raw, at: now, ck: f.ck ? now + 150 : 0 });
+      if (Math.hypot(v.tx - v.x, v.ty - v.y) > 200) { v.x = v.tx; v.y = v.ty; v.vx = v.vy = 0; } // a new round: jump there
+    }
+    v.x += (v.tx - v.x) * k; v.y += (v.ty - v.y) * k; v.f += wrapA(v.tf - v.f) * k;
+  }
+  for (const id of views.keys()) if (!seen.has(id)) views.delete(id);
+}
+const parts = [], pops = [];
+function sparks(x, y, color, n, speed, life = 0.5, size = 5) { for (let i = 0; i < n; i++) { const a = Math.random() * Math.PI * 2, s = speed * (0.3 + Math.random()); parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: life * (0.6 + Math.random() * 0.8), color, size: size * (0.5 + Math.random()) }); } }
+function pop(x, y, text, color) { pops.push({ x, y, text, color, life: 1.1 }); }
+function throwFx(x, y) { sparks(x, y, "#fff3d6", 6, 140, 0.25, 4); sfx("throw"); }
+function hitFx(x, y, id) { sparks(x, y, "#ffb21e", 18, 300, 0.5, 6); pop(x, y, "OUT!", "#ff6b6b"); shake = Math.max(shake, 8); sfx("hit"); }
+function catchFx(x, y) { sparks(x, y, "#7cf2c9", 22, 260, 0.6, 6); pop(x, y, "CAUGHT!", "#7cf2c9"); shake = Math.max(shake, 6); sfx("catch"); }
+function bounceFx() { sfx("bounce"); }
+
+function draw(g, dt, now) {
+  const team = teamOf(g, net.sessionId); setView(team < 0 ? 0 : team);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = "#1d1430"; ctx.fillRect(0, 0, W, H);
+  shake *= Math.exp(-dt * 8);
+  moveCam(dt);
+  const k = DPR * scale * cam.z, sx = (Math.random() - 0.5) * shake, sy = (Math.random() - 0.5) * shake;
+  const courtSpace = () => ctx.setTransform(k * M[0], k * M[2], k * M[1], k * M[3], DPR * (W / 2 + sx) - k * (M[0] * cam.x + M[1] * cam.y), DPR * (CY + sy) - k * (M[2] * cam.x + M[3] * cam.y));
+  courtSpace(); // from here on: court units
+  // the gym: a wooden floor in planks, each half tinted in its team's color, the lines
+  ctx.fillStyle = "#3a2752"; rounded(-HL - 22, -HW - 22, 2 * (HL + 22), 2 * HW + 44 + 70, 26); ctx.fill();
+  for (let i = 0; i < 22; i++) { ctx.fillStyle = i % 2 ? "#d9a066" : "#d39a5f"; ctx.fillRect(-HL, -HW + (i * 2 * HW) / 22, 2 * HL, (2 * HW) / 22 + 0.5); }
+  ctx.strokeStyle = "#00000014"; ctx.lineWidth = 1.5; for (let i = 0; i < 22; i++) { const off = (i * 137) % 220; ctx.beginPath(); for (let x = -HL + off; x < HL; x += 220) { ctx.moveTo(x, -HW + (i * 2 * HW) / 22); ctx.lineTo(x, -HW + ((i + 1) * 2 * HW) / 22); } ctx.stroke(); }
+  for (const t of [0, 1]) { ctx.fillStyle = TEAM_COLORS[t] + "1c"; ctx.fillRect(t === 0 ? -HL : 0, -HW, HL, 2 * HW); ctx.fillStyle = TEAM_COLORS[t]; ctx.fillRect(t === 0 ? -HL : 0, -HW - 12, HL, 7); ctx.fillRect(t === 0 ? -HL : 0, HW + 5, HL, 7); }
+  ctx.strokeStyle = "#fffaf0"; ctx.lineWidth = 5; ctx.strokeRect(-HL, -HW, 2 * HL, 2 * HW);
+  ctx.strokeStyle = "#ffffffaa"; ctx.lineWidth = 3; for (const f of [-1, 1]) { ctx.beginPath(); ctx.moveTo(f * HL * 0.33, -HW); ctx.lineTo(f * HL * 0.33, HW); ctx.stroke(); }
+  ctx.strokeStyle = "#ffe16a"; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(0, -HW - 10); ctx.lineTo(0, HW + 10); ctx.stroke();
+  ctx.strokeStyle = "#ffe16a88"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, 70, 0, Math.PI * 2); ctx.stroke();
+  // the benches outside the near side
+  for (const t of [0, 1]) { const f = t === 0 ? -1 : 1; ctx.fillStyle = "#5a3d2a"; rounded(Math.min(f * 80, f * 340), HW + 34, 260, 36, 10); ctx.fill(); ctx.fillStyle = TEAM_COLORS[t] + "66"; rounded(Math.min(f * 80, f * 340), HW + 34, 260, 8, 4); ctx.fill(); }
+  // players: shadow, body in the team color, head in their own color, hands open while catching
+  const list = drawList(g), balls = ballsNow();
+  for (const d of list) { ctx.fillStyle = "#00000030"; ctx.beginPath(); ctx.ellipse(d.x + 4, d.y + 6, PR, PR * 0.85, 0, 0, Math.PI * 2); ctx.fill(); }
+  for (const d of list) {
+    ctx.globalAlpha = d.out ? 0.45 : 1;
+    const c = Math.cos(d.f), s = Math.sin(d.f);
+    if (d.mine && !d.out) { ctx.strokeStyle = `rgba(255,178,30,${0.5 + Math.sin(now / 180) * 0.25})`; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(d.x, d.y, PR + 9, 0, Math.PI * 2); ctx.stroke(); }
+    if (d.ck) { ctx.strokeStyle = "#7cf2c9"; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(d.x + c * 10, d.y + s * 10, PR + 6, d.f - 1.1, d.f + 1.1); ctx.stroke(); }
+    for (const side of [-1, 1]) { const hx = d.x + c * (d.ck ? 16 : 10) - s * side * 14, hy = d.y + s * (d.ck ? 16 : 10) + c * side * 14; ctx.fillStyle = "#f1c9a5"; ctx.beginPath(); ctx.arc(hx, hy, 5.5, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = TEAM_COLORS[d.team]; ctx.beginPath(); ctx.arc(d.x, d.y, PR, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = TEAM_DARK[d.team]; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = d.color || "#f1c9a5"; ctx.beginPath(); ctx.arc(d.x + c * 3, d.y + s * 3, PR * 0.5, 0, Math.PI * 2); ctx.fill();
+    if (d.out) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(d.x - 7, d.y - 7); ctx.lineTo(d.x + 7, d.y + 7); ctx.moveTo(d.x + 7, d.y - 7); ctx.lineTo(d.x - 7, d.y + 7); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+  }
+  // balls: held ones in their holder's hand, flying ones (this screen's flights) with a streak
+  for (const b of balls) {
+    const f = flights.get(b.i), flying = f && f.done === undefined;
+    let x = b.x, y = b.y;
+    if (b.o && !flying) { const h = bodyOf(b.o); if (h) ({ x, y } = handOf(h)); }
+    else if (flying) { x = f.x; y = f.y; }
+    else { const v = ballViews.get(b.i) || ballViews.set(b.i, { x, y }).get(b.i), e = 1 - Math.exp(-dt * 18); v.x += (x - v.x) * e; v.y += (y - v.y) * e; if (Math.hypot(x - v.x, y - v.y) > 150) { v.x = x; v.y = y; } x = v.x; y = v.y; }
+    if (flying || b.l) { const vx = flying ? f.vx : b.vx, vy = flying ? f.vy : b.vy, sp = Math.hypot(vx, vy) || 1; ctx.strokeStyle = "#ffb21e55"; ctx.lineWidth = BR * 1.6; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(x - (vx / sp) * 60, y - (vy / sp) * 60); ctx.lineTo(x, y); ctx.stroke(); }
+    ballViews.set(b.i, ballViews.get(b.i) || { x, y }); if (b.o || flying) Object.assign(ballViews.get(b.i), { x, y });
+    ctx.fillStyle = "#00000035"; ctx.beginPath(); ctx.arc(x + 3, y + 4, BR, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ffb21e"; ctx.beginPath(); ctx.arc(x, y, BR, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#b8650a"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#fff6"; ctx.beginPath(); ctx.arc(x - 3, y - 3, BR * 0.38, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92;
+    if (p.life <= 0) { parts.splice(i, 1); continue; }
+    ctx.globalAlpha = Math.min(1, p.life * 2.5); ctx.fillStyle = p.color; ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+  // names and pop-up words, upright on screen
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  if (!ATTRACT) for (const d of list) {
+    if (d.out && !d.mine) continue;
+    const [x, y] = toScreen(d.x, d.y), label = d.mine ? "You" : d.name, R = PR * scale * cam.z;
+    ctx.font = `700 ${d.mine ? 13 : 11}px system-ui, sans-serif`; ctx.lineWidth = 3; ctx.strokeStyle = "#0009";
+    ctx.strokeText(label, x + sx, y + sy - R - 4); ctx.fillStyle = d.mine ? "#ffb21e" : d.bot ? "#ffffffcc" : "#fff"; ctx.fillText(label, x + sx, y + sy - R - 4);
+  }
+  for (let i = pops.length - 1; i >= 0; i--) {
+    const p = pops[i]; p.life -= dt; if (p.life <= 0) { pops.splice(i, 1); continue; }
+    const [x, y] = toScreen(p.x, p.y);
+    ctx.globalAlpha = Math.min(1, p.life * 2); ctx.font = `900 ${Math.round(20 + (1.1 - p.life) * 8)}px system-ui, sans-serif`; ctx.lineWidth = 4; ctx.strokeStyle = "#1d1430";
+    ctx.strokeText(p.text, x, y - 26 - (1.1 - p.life) * 30); ctx.fillStyle = p.color; ctx.fillText(p.text, x, y - 26 - (1.1 - p.life) * 30);
+  }
+  ctx.globalAlpha = 1;
+  if (joy) { // the thumb stick
+    ctx.fillStyle = "#ffffff1c"; ctx.strokeStyle = "#ffffff55"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(joy.ox, joy.oy, 52, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    const dx = joy.x - joy.ox, dy = joy.y - joy.oy, d = Math.hypot(dx, dy), m = Math.min(1, 52 / (d || 1));
+    ctx.fillStyle = "#ffffff66"; ctx.beginPath(); ctx.arc(joy.ox + dx * m, joy.oy + dy * m, 24, 0, Math.PI * 2); ctx.fill();
+  }
+}
+const ballViews = new Map(); // ball i -> where this screen drew it (rolling balls ease toward the state)
+/** Every player to draw: { id, team, x, y, f, color, name, mine, bot, out, ck }. */
+function drawList(g) {
+  const out = [], now = performance.now();
+  g.teams.forEach((list, team) => list.forEach((id) => {
+    const p = bodyOf(id); if (!p) return;
+    const e = S.entities.players[id] || {};
+    out.push({ id, team, x: p.x, y: p.y, f: p.f, mine: id === net.sessionId, bot: isBot(id), out: !inGame(g, id), ck: p.ck > now, color: id === net.sessionId ? myColor : isBot(id) ? null : e.c || "#ddd", name: nameOf(id) });
+  }));
+  return out;
+}
+function rounded(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+
+// Sounds, made on the fly with WebAudio (no files).
+let audio = null;
+function unlockAudio() { if (!audio && !ATTRACT) try { audio = new AudioContext(); } catch {} }
+function tone(type, f0, f1, len, vol, at = 0) {
+  const t = audio.currentTime + at, o = audio.createOscillator(), gain = audio.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + len);
+  gain.gain.setValueAtTime(vol, t); gain.gain.exponentialRampToValueAtTime(0.001, t + len);
+  o.connect(gain).connect(audio.destination); o.start(t); o.stop(t + len + 0.02);
+}
+function sfx(kind) {
+  if (!audio) return;
+  if (kind === "throw") tone("triangle", 700, 250, 0.12, 0.2);
+  if (kind === "hit") { tone("square", 180, 60, 0.18, 0.2); tone("sine", 90, 50, 0.25, 0.3); }
+  if (kind === "catch") { tone("triangle", 520, 1040, 0.15, 0.2); tone("triangle", 780, 1560, 0.2, 0.12, 0.08); }
+  if (kind === "grab") tone("sine", 400, 600, 0.06, 0.12);
+  if (kind === "ready") tone("sine", 900, 900, 0.05, 0.06);
+  if (kind === "bounce") tone("sine", 160, 90, 0.08, 0.1);
+  if (kind === "whistle") { tone("sine", 2300, 2250, 0.16, 0.12); tone("sine", 2300, 2200, 0.32, 0.12, 0.22); }
+  if (kind === "beep") tone("sine", 660, 650, 0.12, 0.12);
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+let board = null, boardFor = -1, msgUntil = 0, dropped = false, lastCount = "";
+const seen = { id: -1, round: -1, phase: "", outs: "" };
+const startedAt = performance.now();
+function nameOf(id) {
+  if (!id) return "Someone";
+  if (id === net.sessionId) return myName;
+  if (isBot(id)) return BOT_NAMES[+id.slice(1)] || "Bot";
+  return String((S.entities.players[id] || {}).n || "Player");
+}
+function say(html, ms) { $("msg").innerHTML = html; msgUntil = performance.now() + ms; }
+function hud(g, now) {
+  const team = teamOf(g, net.sessionId), t = Date.now();
+  if (seen.id === g.id && g.phase === "roundover" && seen.phase !== "roundover") { say(g.roundWin >= 0 ? `<span style="color:${TEAM_COLORS[g.roundWin]}">${TEAM_NAMES[g.roundWin].toUpperCase()} TAKES IT</span><small>Round ${g.round} · ${TEAM_NAMES[0]} ${g.wins[0]} – ${g.wins[1]} ${TEAM_NAMES[1]}</small>` : `DRAW<small>Round ${g.round}: nobody takes it</small>`, CONFIG.roundOverMs - 200); sfx("whistle"); }
+  if (g.phase === "over" && seen.phase !== "over") sfx("whistle");
+  if (seen.id !== g.id || seen.round !== g.round) { msgUntil = 0; flights.clear(); me.out = ""; me.by = ""; pending.thrown.clear(); pending.grab = null; }
+  Object.assign(seen, { id: g.id, round: g.round, phase: g.phase });
+  const cd = g.phase === "play" && t < g.startAt && g.startAt - t < 3000 ? String(Math.ceil((g.startAt - t) / 1000)) : g.phase === "play" && t >= g.startAt && t - g.startAt < 700 ? "GO!" : "";
+  if (cd !== lastCount) { if (cd) sfx(cd === "GO!" ? "whistle" : "beep"); lastCount = cd; if (cd) say(cd === "GO!" ? `<span style="color:#ffe16a">GO!</span>` : cd, cd === "GO!" ? 600 : 900); }
+  $("msg").classList.toggle("on", now < msgUntil);
+  const left = [0, 1].map((k) => g.teams[k].filter((id) => inGame(g, id)).length), dots = (k) => "●".repeat(g.wins[k]) + "○".repeat(Math.max(0, CONFIG.roundsToWin - g.wins[k]));
+  $("s0").innerHTML = `${left[0]}<i>IN</i><span class="wins">${dots(0)}</span>`; $("s1").innerHTML = `${left[1]}<i>IN</i><span class="wins">${dots(1)}</span>`;
+  $("s0").classList.toggle("me", team === 0); $("s1").classList.toggle("me", team === 1);
+  const sec = Math.ceil(Math.max(0, Math.min(CONFIG.roundMs, g.endsAt - Math.max(t, g.startAt))) / 1000);
+  $("clock").innerHTML = g.phase === "over" ? "FINAL" : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}<small>ROUND ${g.round}</small>`;
+  if (ATTRACT) { $("score").hidden = true; $("hint").textContent = $("net").textContent = ""; return; }
+  const out = team >= 0 && !inGame(g, net.sessionId);
+  $("hint").textContent = team < 0 ? "Both teams are full. You're in the next match." : out ? "You're out! Cheer from the bench: your team can still win the round." : touchUI ? `You're ${TEAM_NAMES[team]}. Drag to run · THROW aims at the nearest foe · CATCH just as a ball reaches you.` : `You're ${TEAM_NAMES[team]}. WASD run · aim with the mouse, click or Space to throw · Shift or right-click to catch, right as a ball arrives.`;
+  $("hint").style.opacity = now - startedAt < 10000 || team < 0 || out ? 1 : 0;
+  const n = livePlayers().length;
+  $("net").textContent = net.offline ? "Offline: playing with bots" : dropped ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the balls and bots" : ""}`;
+  $("over").hidden = g.phase !== "over";
+  if (g.phase === "over") {
+    const won = team >= 0 && g.win === team;
+    $("winner").textContent = won ? "You win!" : `${TEAM_NAMES[g.win]} wins!`;
+    $("winner").style.color = TEAM_COLORS[g.win];
+    $("final").innerHTML = `<span style="color:${TEAM_COLORS[0]}">${TEAM_NAMES[0]}</span> ${g.wins[0]} – ${g.wins[1]} <span style="color:${TEAM_COLORS[1]}">${TEAM_NAMES[1]}</span> <small>rounds</small>`;
+    const ks = Object.entries(g.kills || {}).sort((a, b) => b[1][0] - a[1][0]).slice(0, 6);
+    $("outs").innerHTML = ks.length ? ks.map(([id, [n, name]]) => `<li class="${id === net.sessionId ? "me" : ""}">${esc(id === net.sessionId ? "You" : name)}<span>${n}</span></li>`).join("") : "<li>Nobody got anyone out.</li>";
+    $("again").hidden = team < 0;
+    $("again").textContent = myReady === g.id ? "Waiting for the others…" : "Play again";
+    $("next").textContent = `Next match in ${Math.max(0, Math.ceil((g.overAt - t) / 1000))}s`;
+    if (boardFor !== g.id) { boardFor = g.id; showBoard(((g.kills || {})[net.sessionId] || [0])[0]); }
+  }
+}
+function showBoard(myOuts) {
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (myOuts > 0 ? board.submit(myOuts, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No outs yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+$("again").onclick = () => { const g = game(); if (g && g.phase === "over") { myReady = g.id; net.me.set("rdy", g.id); } };
+
+/** Two players picked the same color at once (the joiner's first state can be empty): the later sessionId picks again. */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId);
+  if (!others.some(([id, p]) => p.c === myColor && id < net.sessionId)) return;
+  const taken = new Set(others.map(([, p]) => p.c)); // bots have plain skin-colored heads, so only people's colors count
+  myColor = COLORS.find((c) => !taken.has(c)) || myColor; net.me.set("c", myColor);
+}
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+const touchUI = matchMedia("(pointer: coarse)").matches && !ATTRACT;
+const keys = new Set();
+let joy = null, mouse = null; // the thumb stick { id, ox, oy, x, y }; the mouse { x, y, at } in screen px
+/** Where I want to run, in court directions: the keys or the thumb stick, turned from screen to court by the view. */
+function myInput() {
+  let u = (keys.has("arrowright") || keys.has("d") ? 1 : 0) - (keys.has("arrowleft") || keys.has("a") ? 1 : 0);
+  let v = (keys.has("arrowdown") || keys.has("s") ? 1 : 0) - (keys.has("arrowup") || keys.has("w") ? 1 : 0);
+  if (joy) { const dx = joy.x - joy.ox, dy = joy.y - joy.oy, d = Math.hypot(dx, dy); u = d > 6 ? (dx / d) * Math.min(1, d / 46) : 0; v = d > 6 ? (dy / d) * Math.min(1, d / 46) : 0; }
+  const l = Math.hypot(u, v); if (l > 1) { u /= l; v /= l; }
+  const det = M[0] * M[3] - M[1] * M[2];
+  return [(M[3] * u - M[1] * v) / det, (-M[2] * u + M[0] * v) / det];
+}
+/** The court point under the mouse, if the mouse moved in the last 4s (else auto-aim). */
+const aimPoint = () => (mouse && performance.now() - mouse.at < 4000 ? toCourt(mouse.x, mouse.y) : null);
+addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase(); unlockAudio();
+  if (["arrowleft", "arrowright", "arrowup", "arrowdown", " "].includes(k)) e.preventDefault();
+  keys.add(k);
+  if (e.repeat) return;
+  if (k === " " || k === "j") act.throw = true;
+  if (k === "shift" || k === "k" || k === "x") act.catch = true;
+});
+addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+addEventListener("blur", () => keys.clear());
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener("pointerdown", (e) => {
+  e.preventDefault(); unlockAudio();
+  if (e.pointerType === "mouse") { mouse = { x: e.clientX, y: e.clientY, at: performance.now() }; if (e.button === 2) act.catch = true; else act.throw = true; return; }
+  if (!joy) { joy = { id: e.pointerId, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); }
+});
+cv.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") mouse = { x: e.clientX, y: e.clientY, at: performance.now() }; if (joy && e.pointerId === joy.id) { joy.x = e.clientX; joy.y = e.clientY; } });
+for (const ev of ["pointerup", "pointercancel"]) cv.addEventListener(ev, (e) => { if (joy && e.pointerId === joy.id) joy = null; });
+$("pad").hidden = !touchUI;
+for (const [id, down] of [["bThrow", () => (act.throw = true)], ["bCatch", () => (act.catch = true)]]) {
+  const b = $(id);
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); b.setPointerCapture(e.pointerId); b.classList.add("on"); down(); });
+  for (const ev of ["pointerup", "pointercancel"]) b.addEventListener(ev, () => b.classList.remove("on"));
+}
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const realNow = performance.now(); // timed on the real clock: after a long freeze the rAF time can be from before the wake
+  if (lastFrameAt && realNow - lastFrameAt > 1000) { wakeHold = realNow + 700; host.wasHost = false; host.last = null; } lastFrameAt = realNow; // woke from a freeze or a background tab: another player may have run the match meanwhile, so let their state arrive, then adopt it like a new host
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; // the first frame can be stamped before `last`
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  syncViews(dt);
+  if (isHost()) { botCatchCheck(now); hostTick(dt, now); } else host.wasHost = false;
+  const g = game();
+  if (g) {
+    myTick(dt, g, now);
+    draw(g, dt, now);
+    if (now - lastHud > 100) { lastHud = now; hud(g, now); }
+  }
+}
+
+(async function start() {
+  net = await connect();
+  me.id = net.sessionId;
+  net.onState((st) => { S = st; });
+  net.on("grab", (msg, from) => { if (isHost() && msg) applyGrab(msg, from); });
+  net.on("throw", (msg, from) => {
+    if (!msg) return;
+    if (isHost()) applyThrow(msg, from);
+    else if (from !== net.sessionId) { flights.set(+msg.i, { i: +msg.i, n: +msg.n, x: +msg.x, y: +msg.y, vx: +msg.vx, vy: +msg.vy, by: from, until: performance.now() + CONFIG.liveMs }); throwFx(+msg.x, +msg.y); }
+  });
+  net.on("hit", (msg, from) => { if (isHost() && msg) applyHitOrCatch(msg, from, false); });
+  net.on("caught", (msg, from) => { if (!msg) return; if (isHost()) applyHitOrCatch(msg, from, true); else { const f = flights.get(+msg.i); if (f) f.done = f.n; const p = bodyOf(from); if (p) catchFx(p.x, p.y); } });
+  net.onDisconnect(() => { dropped = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { dropped = false; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = new Set(Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c));
+  myColor = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: myColor, hb: Date.now() });
+  if (ATTRACT) Object.assign(CONFIG, { startMs: 600, roundOverMs: 1600, botWait: 350, botSpeed: 0.95, roundsToWin: 99 });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

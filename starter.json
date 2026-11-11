@@ -1,0 +1,21 @@
+{
+  "name": "Dodgeball Duel",
+  "genre": "sports",
+  "dim": "2D",
+  "mode": "Versus",
+  "players": "2–10",
+  "hook": "Rush the line, throw, dodge, catch to send them out.",
+  "how": "Race to the five balls on the middle line, then throw at the other team. Get hit and you're out to the bench; press Catch right as a ball reaches you and the thrower is out instead. Last team standing wins the round; first to three rounds wins.",
+  "controls": "WASD or arrows to run, aim with the mouse, click or Space to throw, Shift or right-click to catch, or a thumb stick with Throw and Catch buttons",
+  "uses": [
+    ["Host-run rounds", "One player's browser keeps the balls, the rounds and who is out; if it leaves, the next player takes over."],
+    ["Leaderboard", "Most players knocked out, for every player."],
+    ["Bots", "Bots fill every empty spot, so it's always at least 4 against 4: they grab balls, throw, dodge and sometimes catch."],
+    ["Live sync", "Every player and every ball in flight show up on all screens at once; a ball that reaches you is decided on your screen."]
+  ],
+  "ideas": [
+    "Add a golden ball that knocks out two players",
+    "When you catch a ball, bring a teammate back from the bench",
+    "Make the court shrink as the round goes on"
+  ]
+}
