@@ -33,7 +33,7 @@
   .card h2 { margin: 0 0 4px; font-size: 27px; }
   .card h3 { margin: 14px 0 4px; font-size: 14px; color: #ffb21e; text-align: left; }
   .card ol { text-align: left; margin: 0; padding-left: 26px; font-size: 14px; min-height: 22px; }
-  .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.me { color: #ffb21e; font-weight: 700; }
+  .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.note { list-style: none; margin-left: -26px; } /* a status line, not a numbered entry */ .card li.me { color: #ffb21e; font-weight: 700; }
   .card p { margin: 8px 0 0; font-size: 13px; opacity: .8; }
   #final { font: 800 20px system-ui, sans-serif; }
   button.go { width: 100%; min-height: 48px; margin-top: 14px; border: 0; border-radius: 12px; background: #ffb21e; color: #2a1600; font: 800 17px system-ui, sans-serif; cursor: pointer; }
@@ -50,7 +50,7 @@
 <div id="over" hidden><div class="card">
   <h2 id="winner"></h2><div id="final"></div>
   <h3>Most outs this match</h3><ol id="outs"></ol>
-  <h3>Most outs ever</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Most outs ever</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="go" id="again">Play again</button><p id="next"></p>
 </div></div>
 <script>
@@ -81,8 +81,8 @@
  *       `game`  {id, v, phase, round, teams, wins, startAt, endsAt, outs, kills, roundWin, resumeAt, win, overAt}:
  *               who plays (sessionIds or bots "b1".."b9"), who is out this round (`outs` {id: who got them}),
  *               outs per player, rounds won, the clock (timestamps). `v` goes up on every write.
- *       `balls` [{i, x, y, vx, vy, o, t, l, n}]: every ball ~15 times a second (o = who holds it, l = 1 while
- *               it flies after a throw by `t`, n = that throw's number).
+ *       `balls` [{i, x, y, vx, vy, o, t, l, n, lf}]: every ball ~15 times a second (o = who holds it, l = 1 while
+ *               it flies after a throw by `t`, n = that throw's number, lf = ms it still flies).
  *       `bots`  [{i, x, y, f, ck}]: the bots ~10 times a second.
  *   - Intents and events: "grab" {i} (my hand touched ball i: the host says yes by writing me as its holder),
  *     "throw" {i, x, y, vx, vy, n} (to everyone: every screen flies the ball at once; the host adopts it),
@@ -291,7 +291,8 @@ function newGame(id) {
   return { id, phase: "play", round: 1, teams: fillBots(teams, teamSize(people.length)), wins: [0, 0], startAt: 0, endsAt: 0, outs: {}, kills: {}, roundWin: -1, resumeAt: 0, win: -1, overAt: 0 };
 }
 function writeBalls(onlyIfMoved) {
-  const r = Math.round, body = JSON.stringify(host.balls.map((b) => ({ i: b.i, x: r(b.x), y: r(b.y), vx: r(b.vx), vy: r(b.vy), o: b.o, t: b.t, l: b.l, n: b.n })));
+  const r = Math.round, now = performance.now();
+  const body = JSON.stringify(host.balls.map((b) => ({ i: b.i, x: r(b.x), y: r(b.y), vx: r(b.vx), vy: r(b.vy), o: b.o, t: b.t, l: b.l, n: b.n, ...(b.l ? { lf: Math.max(0, r((b.until || now) - now)) } : {}) })));
   host.lastBalls = performance.now();
   if (onlyIfMoved && body === host.lastBody) return; // nothing moved: save the message
   host.lastBody = body; net.setShared("balls", body);
@@ -357,11 +358,12 @@ function hostBalls(g, dt, now) {
     if (b.o) { const h = bodyOf(b.o); if (!h || !inGame(g, b.o)) { b.o = ""; continue; } const hd = handOf(h); b.x = hd.x; b.y = hd.y; b.vx = b.vy = 0; continue; }
     const wall = stepBall(b, dt);
     if (b.l && (wall || now > b.until)) { deaden(b, false); if (wall) bounceFx(b); }
-    if (b.l) {
+    if (b.l && b.reached !== b.n) {
       const team = teamOf(g, b.t);
       for (const id of g.teams[1 - team] || []) {
         if (!inGame(g, id)) continue;
         if (id === net.sessionId) { if (touches(b.x, b.y, me)) { g = ballReachedMe(g, b); break; } continue; } // my own screen decides for me
+        if (!isBot(id)) { const p = bodyOf(id); if (p && touches(b.x, b.y, p)) { b.reached = b.n; break; } continue; } // another person: their screen decides, and this throw can't get anyone behind them too
         const bot = host.bots.get(id); if (!bot || !touches(b.x, b.y, bot)) continue;
         if (bot.ck > now) { g = caught(g, b, id); } else { const by = b.t; deaden(b, true); hitFx(bot.x, bot.y, id); g = markOut(g, id, by); }
         break;
@@ -403,11 +405,12 @@ function applyThrow(msg, from) {
 /** A thrown ball reached someone on their own screen: they say whether it hit them or they caught it. */
 function applyHitOrCatch(msg, from, catching) {
   let g = game(); const b = host.balls[+msg.i];
-  if (!g || teamOf(g, from) < 0 || !inGame(g, from)) return;
-  if (b && b.l && b.n === +msg.n) { if (catching) g = caught(g, b, from); else { deaden(b, true); writeBalls(); } }
-  else if (catching && b && !b.o) { b.o = from; b.l = 0; writeBalls(); } // the host already let it drop: still theirs
-  if (!catching) markOut(g, from, msg.by);
-  else if (msg.by && inGame(g, msg.by)) markOut(g, msg.by, from);
+  if (!g || teamOf(g, from) < 0) return;
+  if (!catching) { if (b && b.l && b.n === +msg.n) { deaden(b, true); writeBalls(); } markOut(g, from, msg.by); return; } // (their `p` may already say they're out: the ball stops here all the same)
+  if (!inGame(g, from)) return;
+  if (b && b.l && b.n === +msg.n) g = caught(g, b, from);
+  else if (b && !b.o) { b.o = from; b.l = 0; writeBalls(); } // the host already let it drop: still theirs
+  if (msg.by && inGame(g, msg.by)) markOut(g, msg.by, from);
 }
 
 // ── BOTS ────────────────────────────────────────────────────────────────────────────
@@ -529,7 +532,7 @@ function ballsNow() {
 function flyBalls(g, dt, now, team) {
   for (const b of cached("balls", S.shared.balls, []) || []) { // a throw I missed the event for: fly it from the state
     const f = flights.get(b.i);
-    if (b.l && (!f || f.n !== b.n) && !(f && f.done === b.n)) flights.set(b.i, { i: b.i, n: b.n, x: b.x, y: b.y, vx: b.vx, vy: b.vy, by: b.t, until: now + CONFIG.liveMs * 0.6 });
+    if (b.l && (!f || f.n !== b.n) && !(f && f.done === b.n)) flights.set(b.i, { i: b.i, n: b.n, x: b.x, y: b.y, vx: b.vx, vy: b.vy, by: b.t, until: now + (b.lf ?? CONFIG.liveMs * 0.6) }); // lf: how long it still flies on the host
   }
   for (const f of flights.values()) {
     if (f.done !== undefined) continue;
@@ -537,22 +540,34 @@ function flyBalls(g, dt, now, team) {
     if (wall || now > f.until) { f.done = f.n; if (wall) bounceFx(f); continue; }
     const throwerTeam = teamOf(g, f.by);
     if (team >= 0 && team !== throwerTeam && inGame(g, net.sessionId) && touches(f.x, f.y, me)) { f.done = f.n; ballReachedMe(g, { i: f.i, n: f.n, t: f.by, x: f.x, y: f.y }); continue; }
-    for (const id of g.teams[1 - throwerTeam] || []) { if (id === net.sessionId || !inGame(g, id)) continue; const o = bodyOf(id); if (o && touches(f.x, f.y, o)) { f.done = f.n; hitFx(o.x, o.y, id); break; } } // it stops at whoever it reaches; their screen says what happened
+    for (const id of g.teams[1 - throwerTeam] || []) { // it stops at whoever it reaches; their screen says what happened ("hit" / "caught"), the host's for a bot
+      if (id === net.sessionId || (!inGame(g, id) && (g.outs || {})[id] !== f.by)) continue; // (the host's word that this throw got them can land before the ball does here)
+      const o = bodyOf(id); if (!o || !touches(f.x, f.y, o)) continue;
+      f.done = f.n;
+      if (isBot(id)) { if (o.ck > now) catchFx(o.x, o.y); else if (!inGame(g, id)) hitFx(o.x, o.y, id); else botHits.set(id, { by: f.by, at: now }); }
+      break;
+    }
+  }
+  for (const [id, h] of botHits) { // a bot my screen saw hit: OUT! once the host agrees (it may have dodged there)
+    if ((g.outs || {})[id] === h.by) { const o = bodyOf(id); if (o) hitFx(o.x, o.y, id); botHits.delete(id); }
+    else if (now - h.at > 600) botHits.delete(id);
   }
 }
+const botHits = new Map(); // bot id -> { by, at }: a throw reached it on this screen, the host hasn't said it's out yet
 /** A thrown ball reached me (on my screen): caught if my hands are open, otherwise I'm out. */
 function ballReachedMe(g, b) {
   const now = performance.now(), catching = me.ck > now && !ballsNow().some((q) => q.o === net.sessionId);
   if (catching) {
-    catchFx(me.x, me.y); say(`<span style="color:#7cf2c9">CAUGHT!</span><small>${esc(nameOf(b.t))} is out</small>`, 1300);
-    if (isHost()) return caught(g, host.balls[b.i], net.sessionId);
+    if (!isHost()) catchFx(me.x, me.y); // (as host, caught() shows it)
+    say(`<span style="color:#7cf2c9">CAUGHT!</span><small>${esc(nameOf(b.t))} is out</small>`, 1300);
+    if (isHost()) { net.send("caught", { i: b.i, n: b.n, by: b.t }); return caught(g, host.balls[b.i], net.sessionId); } // (the others show it from the event)
     pending.grab = { i: b.i, at: now }; net.send("caught", { i: b.i, n: b.n, by: b.t });
     return g;
   }
   me.out = roundKey(g); me.by = b.t || ""; hitFx(me.x, me.y, net.sessionId); shake = 14;
   say(`<span style="color:#ff6b6b">OUT!</span><small>${esc(nameOf(b.t))} got you</small>`, 1500);
+  net.send("hit", { i: b.i, n: b.n, by: b.t }); // everyone shows it; the host (if that's not me) counts it
   if (isHost()) { const by = b.t; deaden(host.balls[b.i], true); writeBalls(); return markOut(g, net.sessionId, by); }
-  net.send("hit", { i: b.i, n: b.n, by: b.t });
   return g;
 }
 
@@ -759,7 +774,7 @@ function hud(g, now) {
     $("winner").style.color = TEAM_COLORS[g.win];
     $("final").innerHTML = `<span style="color:${TEAM_COLORS[0]}">${TEAM_NAMES[0]}</span> ${g.wins[0]} – ${g.wins[1]} <span style="color:${TEAM_COLORS[1]}">${TEAM_NAMES[1]}</span> <small>rounds</small>`;
     const ks = Object.entries(g.kills || {}).sort((a, b) => b[1][0] - a[1][0]).slice(0, 6);
-    $("outs").innerHTML = ks.length ? ks.map(([id, [n, name]]) => `<li class="${id === net.sessionId ? "me" : ""}">${esc(id === net.sessionId ? "You" : name)}<span>${n}</span></li>`).join("") : "<li>Nobody got anyone out.</li>";
+    $("outs").innerHTML = ks.length ? ks.map(([id, [n, name]]) => `<li class="${id === net.sessionId ? "me" : ""}">${esc(id === net.sessionId ? "You" : name)}<span>${n}</span></li>`).join("") : "<li class=\"note\">Nobody got anyone out.</li>";
     $("again").hidden = team < 0;
     $("again").textContent = myReady === g.id ? "Waiting for the others…" : "Play again";
     $("next").textContent = `Next match in ${Math.max(0, Math.ceil((g.overAt - t) / 1000))}s`;
@@ -768,11 +783,11 @@ function hud(g, now) {
 }
 function showBoard(myOuts) {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = "<li class=\"note\">Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li class=\"note\">Loading…</li>";
   (myOuts > 0 ? board.submit(myOuts, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No outs yet. Be the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li class=\"note\">No outs yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li class=\"note\">Couldn't load the leaderboard.</li>"; });
 }
 $("again").onclick = () => { const g = game(); if (g && g.phase === "over") { myReady = g.id; net.me.set("rdy", g.id); } };
 
@@ -808,7 +823,7 @@ addEventListener("keydown", (e) => {
   if (k === "shift" || k === "k" || k === "x") act.catch = true;
 });
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
-addEventListener("blur", () => keys.clear());
+addEventListener("blur", () => { keys.clear(); joy = null; }); // (switching away mid-drag: don't keep running)
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
 cv.addEventListener("pointerdown", (e) => {
   e.preventDefault(); unlockAudio();
@@ -853,7 +868,11 @@ function frame(now) {
     if (isHost()) applyThrow(msg, from);
     else if (from !== net.sessionId) { flights.set(+msg.i, { i: +msg.i, n: +msg.n, x: +msg.x, y: +msg.y, vx: +msg.vx, vy: +msg.vy, by: from, until: performance.now() + CONFIG.liveMs }); throwFx(+msg.x, +msg.y); }
   });
-  net.on("hit", (msg, from) => { if (isHost() && msg) applyHitOrCatch(msg, from, false); });
+  net.on("hit", (msg, from) => { // someone was hit on their own screen: everyone shows it
+    if (!msg) return;
+    const p = bodyOf(from); if (p) hitFx(p.x, p.y, from);
+    if (isHost()) applyHitOrCatch(msg, from, false); else { const f = flights.get(+msg.i); if (f) f.done = f.n; }
+  });
   net.on("caught", (msg, from) => { if (!msg) return; if (isHost()) applyHitOrCatch(msg, from, true); else { const f = flights.get(+msg.i); if (f) f.done = f.n; const p = bodyOf(from); if (p) catchFx(p.x, p.y); } });
   net.onDisconnect(() => { dropped = true; $("net").textContent = "Reconnecting…"; });
   net.onReconnect(() => { dropped = false; });
