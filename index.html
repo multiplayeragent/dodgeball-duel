@@ -274,7 +274,14 @@ function arrangeTeams(g, people) {
     let i = t[k].indexOf(null); if (i < 0) i = t[k].findIndex(isBot);
     if (i < 0) t[k].push(id); else { if (outs[t[k][i]] !== undefined) outs[id] = outs[t[k][i]]; t[k][i] = id; }
   }
-  return { teams: fillBots(t, size), outs };
+  const teams = fillBots(t, size);
+  // someone who leaves while out: the bot that takes their spot is out too (leaving can't bring a player back)
+  [0, 1].forEach((k) => {
+    const gone = g.teams[k].filter((id) => !isBot(id) && !people.includes(id) && outs[id] !== undefined);
+    const fresh = teams[k].filter((id) => isBot(id) && !g.teams[k].includes(id));
+    gone.forEach((id, j) => { if (fresh[j]) outs[fresh[j]] = outs[id]; });
+  });
+  return { teams, outs };
 }
 /** A round starts: everyone on the back line, the balls on the middle line, nobody out. */
 function newRound(g, round, t) {
@@ -303,7 +310,7 @@ const newBot = (id, s) => ({ id, x: s.x, y: s.y, f: s.f, vx: 0, vy: 0, ck: 0, ck
 /** Become host: take over the game, the balls and the bots exactly as state has them (bots from where this screen drew them). */
 function adopt() {
   host.wasHost = true; host.bots.clear();
-  host.balls = (parse(S.shared.balls, []) || []).map((b) => { const f = flights.get(b.i); return f && f.n === b.n && b.l ? { ...b, x: f.x, y: f.y, until: f.until } : { ...b, until: performance.now() + CONFIG.liveMs * 0.5 }; });
+  host.balls = (parse(S.shared.balls, []) || []).map((b) => { const f = flights.get(b.i); return f && f.n === b.n && b.l ? { ...b, x: f.x, y: f.y, until: f.until, lt: b.t, la: performance.now() } : { ...b, until: performance.now() + CONFIG.liveMs * 0.5, ...(b.l ? { lt: b.t, la: performance.now() } : {}) }; });
   for (const q of parse(S.shared.bots, [])) { const v = views.get(q.i) || q; host.bots.set(q.i, newBot(q.i, { x: v.x, y: v.y, f: v.f })); }
 }
 /** host.bots holds exactly the bots on the teams. */
@@ -328,7 +335,7 @@ function hostTick(dt, now) {
   syncBots(g);
   if (!host.balls.length) host.balls = Array.from({ length: CONFIG.balls }, (_, i) => ({ i, ...ballSpot(i), vx: 0, vy: 0, o: "", t: "", l: 0, n: 0 }));
   // people who say they're out (their own entity) go into game.outs
-  for (const id of g.teams.flat()) { const p = S.entities.players[id]; if (!isBot(id) && p && p.o === roundKey(g) && g.outs[id] === undefined) g = markOut(g, id, p.by || ""); }
+  for (const id of g.teams.flat()) { const p = S.entities.players[id]; if (!isBot(id) && p && p.o === roundKey(g) && g.outs[id] === undefined) g = markOut(g, id, host.balls.some((b) => b.lt === p.by && performance.now() - b.la < CONFIG.liveMs + 1500) && teamOf(g, p.by) === 1 - teamOf(g, id) ? p.by : ""); }
   if (g.phase === "play" && t >= g.startAt) {
     const left = [0, 1].map((k) => g.teams[k].filter((id) => inGame(g, id)).length);
     if (!left[0] || !left[1] || t >= g.endsAt) { // a round is over: last team standing, or more players standing at the buzzer
@@ -365,7 +372,7 @@ function hostBalls(g, dt, now) {
         if (id === net.sessionId) { if (touches(b.x, b.y, me)) { g = ballReachedMe(g, b); break; } continue; } // my own screen decides for me
         if (!isBot(id)) { const p = bodyOf(id); if (p && touches(b.x, b.y, p)) { b.reached = b.n; break; } continue; } // another person: their screen decides, and this throw can't get anyone behind them too
         const bot = host.bots.get(id); if (!bot || !touches(b.x, b.y, bot)) continue;
-        if (bot.ck > now) { g = caught(g, b, id); } else { const by = b.t; deaden(b, true); hitFx(bot.x, bot.y, id); g = markOut(g, id, by); }
+        if (bot.ck > now && !host.balls.some((q) => q.o === id)) { g = caught(g, b, id); } else { const by = b.t; deaden(b, true); hitFx(bot.x, bot.y, id); g = markOut(g, id, by); }
         break;
       }
     } else if (g.phase === "play") { // a loose ball: the nearest bot (or the host's own player) touching it scoops it up
@@ -390,27 +397,35 @@ function caught(g, b, id) {
 /** Someone else's hand touched loose ball i on their screen: yes, unless it's taken, far from where the host has it, or they hold one already. */
 function applyGrab(msg, from) {
   const g = game(), b = host.balls[+msg.i], p = bodyOf(from);
-  if (!g || !b || !p || g.phase !== "play" || b.o || b.l || teamOf(g, from) < 0 || !inGame(g, from) || host.balls.some((q) => q.o === from)) return;
+  if (!g || !b || !p || g.phase !== "play" || Date.now() < g.startAt || b.o || b.l || teamOf(g, from) < 0 || !inGame(g, from) || host.balls.some((q) => q.o === from)) return;
   if (Math.hypot(b.x - p.x, b.y - p.y) > PR + BR + CONFIG.reach + 70) return; // slack: their latest position can be a little old
   b.o = from; writeBalls();
 }
-/** Someone threw the ball they hold: it flies from where their screen says. */
+/** Someone threw the ball they hold: it flies from where their screen says (if that's at their hand), at the normal speed. */
 function applyThrow(msg, from) {
+  const b = host.balls[+msg.i], p = bodyOf(from);
+  if (!b || b.o !== from || !p) return;
+  let x = +msg.x, y = +msg.y; const vx = +msg.vx, vy = +msg.vy, sp = Math.hypot(vx, vy); if (!isFinite(x + y + vx + vy) || sp < 1) return;
+  if (Math.hypot(x - p.x, y - p.y) > PR + 6 + 70) ({ x, y } = handOf({ ...p, f: Math.atan2(vy, vx) })); // slack: their latest position can be a little old
+  const k = CONFIG.throwSpeed / sp;
+  Object.assign(b, { x, y, vx: vx * k, vy: vy * k, o: "", t: from, l: 1, n: (b.n || 0) + 1, until: performance.now() + CONFIG.liveMs, lt: from, la: performance.now() }); writeBalls();
+}
+/** Who made the throw a "hit" / "caught" report names: ball i's latest throw (number n), a moment ago, by the other team. "" if no such throw. */
+function throwerOf(g, msg, from) {
   const b = host.balls[+msg.i];
-  if (!b || b.o !== from) return;
-  const x = +msg.x, y = +msg.y, vx = +msg.vx, vy = +msg.vy; if (!isFinite(x + y + vx + vy)) return;
-  const k = Math.min(1, CONFIG.throwSpeed / (Math.hypot(vx, vy) || 1));
-  Object.assign(b, { x, y, vx: vx * k, vy: vy * k, o: "", t: from, l: 1, n: +msg.n || 0, until: performance.now() + CONFIG.liveMs }); writeBalls();
+  if (!b || b.n !== +msg.n || !b.lt || performance.now() - b.la > CONFIG.liveMs + 1500) return "";
+  return teamOf(g, b.lt) === 1 - teamOf(g, from) ? b.lt : "";
 }
 /** A thrown ball reached someone on their own screen: they say whether it hit them or they caught it. */
 function applyHitOrCatch(msg, from, catching) {
   let g = game(); const b = host.balls[+msg.i];
   if (!g || teamOf(g, from) < 0) return;
-  if (!catching) { if (b && b.l && b.n === +msg.n) { deaden(b, true); writeBalls(); } markOut(g, from, msg.by); return; } // (their `p` may already say they're out: the ball stops here all the same)
-  if (!inGame(g, from)) return;
-  if (b && b.l && b.n === +msg.n) g = caught(g, b, from);
-  else if (b && !b.o) { b.o = from; b.l = 0; writeBalls(); } // the host already let it drop: still theirs
-  if (msg.by && inGame(g, msg.by)) markOut(g, msg.by, from);
+  const by = throwerOf(g, msg, from); // only a real throw at them counts (a made-up one gets nobody out)
+  if (!catching) { if (by && b.l) { deaden(b, true); writeBalls(); } markOut(g, from, by); return; } // (their `p` may already say they're out: the ball stops here all the same)
+  if (!by || !inGame(g, from) || host.balls.some((q) => q.o === from)) return; // (no catching with a ball in your hand)
+  if (b.l) g = caught(g, b, from);
+  else if (!b.o) { b.o = from; writeBalls(); } // the host already let it drop: still theirs
+  if (inGame(g, by)) markOut(g, by, from);
 }
 
 // ── BOTS ────────────────────────────────────────────────────────────────────────────
@@ -466,10 +481,11 @@ function nearestFoe(p, g, team) {
 function hostThrow(b, p, ang) {
   const hd = handOf({ ...p, f: ang });
   Object.assign(b, { x: hd.x, y: hd.y, vx: Math.cos(ang) * CONFIG.throwSpeed, vy: Math.sin(ang) * CONFIG.throwSpeed, o: "", t: p.id || net.sessionId, l: 1, n: (b.n || 0) + 1, until: performance.now() + CONFIG.liveMs });
+  b.lt = b.t; b.la = performance.now(); // who threw it last, and when (to check "hit" / "caught" reports)
   p.holdAt = 0; throwFx(hd.x, hd.y); writeBalls();
 }
 // Bots press Catch at the moment they planned (botThink set catchAt).
-function botCatchCheck(now) { for (const b of host.bots.values()) if (b.catchAt && now >= b.catchAt) { b.catchAt = 0; b.ck = now + CONFIG.catchMs; b.ckCd = now + CONFIG.catchEvery; } }
+function botCatchCheck(now) { for (const b of host.bots.values()) if (b.catchAt && now >= b.catchAt) { b.catchAt = 0; if (host.balls.some((q) => q.o === b.id)) continue; b.ck = now + CONFIG.catchMs; b.ckCd = now + CONFIG.catchEvery; } } // (hands full: no catch, like a person)
 
 // ── ME ──────────────────────────────────────────────────────────────────────────────
 let myName = "";
@@ -764,7 +780,7 @@ function hud(g, now) {
   if (ATTRACT) { $("score").hidden = true; $("hint").textContent = $("net").textContent = ""; return; }
   const out = team >= 0 && !inGame(g, net.sessionId);
   $("hint").textContent = team < 0 ? "Both teams are full. You're in the next match." : out ? "You're out! Cheer from the bench: your team can still win the round." : touchUI ? `You're ${TEAM_NAMES[team]}. Drag to run · THROW aims at the nearest foe · CATCH just as a ball reaches you.` : `You're ${TEAM_NAMES[team]}. WASD run · aim with the mouse, click or Space to throw · Shift or right-click to catch, right as a ball arrives.`;
-  $("hint").style.opacity = now - startedAt < 10000 || team < 0 || out ? 1 : 0;
+  $("hint").style.opacity = g.phase !== "over" && (now - startedAt < 10000 || team < 0 || out) ? 1 : 0;
   const n = livePlayers().length;
   $("net").textContent = net.offline ? "Offline: playing with bots" : dropped ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the balls and bots" : ""}`;
   $("over").hidden = g.phase !== "over";
